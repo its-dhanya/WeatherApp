@@ -1,28 +1,29 @@
+from flask import Flask, request, render_template, jsonify
 import requests
-from dotenv import load_dotenv
 import os
+from dotenv import load_dotenv
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 # Load environment variables from .env file
 load_dotenv()
 api_key = os.getenv('API_KEY')
+
+app = Flask(__name__)
 
 @dataclass
 class WeatherData:
     main: str
     description: str
     icon: str
-    temperature: float
+    temperature: int
 
-def get_lat_lon(city_name: str, state_code: str, country_code: str, API_key: str) -> Optional[Tuple[float, float]]:
+def get_lat_lon(city_name: str, state_code: str, country_code: str, API_key: str):
     """
     Fetch latitude and longitude for the given city, state, and country.
     """
     try:
-        response = requests.get(f'http://api.openweathermap.org/geo/1.0/direct',
-                                params={'q': f'{city_name},{state_code},{country_code}', 'appid': API_key})
-        response.raise_for_status()  # Raise an error for bad HTTP status codes
+        response = requests.get(f'http://api.openweathermap.org/geo/1.0/direct?q={city_name},{state_code},{country_code}&appid={API_key}')
+        response.raise_for_status()
         data = response.json()
         if not data:
             raise ValueError(f"Location not found for {city_name}, {state_code}, {country_code}")
@@ -32,11 +33,12 @@ def get_lat_lon(city_name: str, state_code: str, country_code: str, API_key: str
         return lat, lon
     except requests.RequestException as e:
         print(f"Error fetching location data: {e}")
+        return None, None
     except ValueError as ve:
         print(ve)
-    return None
+        return None, None
 
-def get_current_weather(lat: float, lon: float, API_key: str) -> Optional[WeatherData]:
+def get_current_weather(lat: float, lon: float, API_key: str):
     """
     Fetch current weather data for the given latitude and longitude.
     """
@@ -45,8 +47,7 @@ def get_current_weather(lat: float, lon: float, API_key: str) -> Optional[Weathe
         return None
 
     try:
-        response = requests.get(f'https://api.openweathermap.org/data/2.5/weather',
-                                params={'lat': lat, 'lon': lon, 'appid': API_key, 'units': 'metric'})
+        response = requests.get(f'https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={API_key}&units=metric')
         response.raise_for_status()
         data = response.json()
 
@@ -57,34 +58,47 @@ def get_current_weather(lat: float, lon: float, API_key: str) -> Optional[Weathe
             main=data['weather'][0].get('main', 'N/A'),
             description=data['weather'][0].get('description', 'N/A'),
             icon=data['weather'][0].get('icon', 'N/A'),
-            temperature=float(data['main'].get('temp', 0))  # Default to 0 if temp is missing
+            temperature=int(data['main'].get('temp', 0))  # Default to 0 if temp is missing
         )
         return weather
     except requests.RequestException as e:
         print(f"Error fetching weather data: {e}")
+        return None
     except ValueError as ve:
         print(ve)
-    return None
+        return None
 
-def main(city_name: str, state_name: str, country_name: str) -> Optional[WeatherData]:
-    """
-    Main function to fetch weather data for a given city, state, and country.
-    """
-    lat_lon = get_lat_lon(city_name, state_name, country_name, api_key)
-    if lat_lon:
-        lat, lon = lat_lon
-        return get_current_weather(lat, lon, api_key)
-    else:
-        print(f"Failed to get location data for {city_name}, {state_name}, {country_name}.")
-    return None
+@app.route("/", methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        city_name = request.form.get('cityName')
+        state_name = request.form.get('stateName')
+        country_name = request.form.get('countryName')
 
-if __name__ == "__main__":
-    city_name = 'Toronto'
-    state_name = 'ON'
-    country_name = 'Canada'
-    weather_data = main(city_name, state_name, country_name)
-    
-    if weather_data:
-        print(weather_data)
-    else:
-        print("Failed to fetch weather data.")
+        # Basic validation
+        if not city_name or not state_name or not country_name:
+            error = "All fields are required."
+            return render_template('index.html', error=error)
+
+        # Validate state abbreviation
+        if len(state_name) != 2 or not state_name.isalpha():
+            error = "State abbreviation must be exactly 2 letters."
+            return render_template('index.html', error=error)
+
+        # Fetch weather data
+        lat, lon = get_lat_lon(city_name, state_name, country_name, api_key)
+        if lat is not None and lon is not None:
+            weather_data = get_current_weather(lat, lon, api_key)
+            if weather_data:
+                return render_template('index.html', data=weather_data)
+            else:
+                error = "Could not retrieve weather data."
+                return render_template('index.html', error=error)
+        else:
+            error = "Invalid location information provided."
+            return render_template('index.html', error=error)
+
+    return render_template('index.html')
+
+if __name__ == '__main__':
+    app.run(debug=True)
